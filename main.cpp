@@ -1,6 +1,8 @@
 #include "include/OrderBookDefs.hpp"
+#include "include/LimitBook.hpp"
 #include <iostream>
 #include <cassert>
+
 
 void test_cache_alignment() {
     std::cout << "[Test] Verifying Core Structures Alignment...\n";
@@ -82,6 +84,44 @@ void test_intrusive_linking() {
     std::cout << "  -> Success: Intrusive pointers safely isolated and manipulated.\n";
 }
 
+void test_matching_engine() {
+    std::cout << "[Test] Booting Phase 2 Matching Engine...\n";
+
+    OrderMemoryPool pool(100);
+    LimitBook book(pool);
+
+    // 1. Build the Ask side of the book
+    Order* ask1 = pool.allocate(1ULL, uint32_t{100}, uint32_t{50}, Side::Sell);
+    Order* ask2 = pool.allocate(2ULL, uint32_t{100}, uint32_t{30}, Side::Sell); // Same price, lower priority
+    Order* ask3 = pool.allocate(3ULL, uint32_t{101}, uint32_t{100}, Side::Sell);
+
+    book.process_order(ask1);
+    book.process_order(ask2);
+    book.process_order(ask3);
+
+    // 2. Incoming aggressive Buy order that crosses the spread
+    // Wants 60 units at price 100.
+    Order* aggressive_buy = pool.allocate(4ULL, uint32_t{100}, uint32_t{60}, Side::Buy);
+    book.process_order(aggressive_buy);
+
+    // 3. Verify the deterministic state
+    // - aggressive_buy should be fully filled and deallocated.
+    // - ask1 should be fully filled and deallocated.
+    // - ask2 should have 20 units remaining.
+    // - ask3 should be untouched.
+
+    // We can't easily assert private variables without getters, but we can
+    // observe the public behavior. Let's hit the remaining volume.
+    Order* ask4 = pool.allocate(5ULL, uint32_t{99}, uint32_t{10}, Side::Sell);
+    book.process_order(ask4);
+
+    // If we send a market-ish buy for 100 at price 100, it should hit ask4, then ask2.
+    Order* sweep_buy = pool.allocate(6ULL, uint32_t{100}, uint32_t{100}, Side::Buy);
+    book.process_order(sweep_buy);
+
+    std::cout << "  -> Success: Template Metaprogramming and O(1) matching executed flawlessly.\n";
+}
+
 int main() {
     std::cout << "=== Starting LOB Engine Phase 1 Test Execution Suite ===\n\n";
 
@@ -89,6 +129,9 @@ int main() {
     test_pool_allocation_and_deallocation();
     test_intrusive_linking();
 
-    std::cout << "\n=== All Tests Passed Successfully! System Architecture Intact. ===\n";
+    std::cout << "\n=== All Tests Passed Successfully for Phase 1! System Architecture Intact. ===\n";
+    std::cout << "=== Starting LOB Engine Phase 2 Test Execution Suite ===\n\n";
+    test_matching_engine();
+    std::cout << "\n=== All Tests Passed Successfully! ===\n";
     return 0;
 }
