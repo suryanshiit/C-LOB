@@ -1,8 +1,11 @@
 #include "include/OrderBookDefs.hpp"
 #include "include/LimitBook.hpp"
+#include "include/ProtocolDefs.hpp"
+#include "include/MmapReader.hpp"
 #include <iostream>
 #include <cassert>
-
+#include <fstream>
+#include <chrono>
 
 void test_cache_alignment() {
     std::cout << "[Test] Verifying Core Structures Alignment...\n";
@@ -122,6 +125,60 @@ void test_matching_engine() {
     std::cout << "  -> Success: Template Metaprogramming and O(1) matching executed flawlessly.\n";
 }
 
+void generate_dummy_binary_file(const std::string& filename, size_t num_messages) {
+    std::cout << "[Setup] Generating dummy binary market data (" << num_messages << " msgs)...\n";
+    std::ofstream out(filename, std::ios::binary);
+
+    ItchAddOrder msg{};
+    msg.message_type = 'A';
+    msg.side = 'B';
+    msg.shares = 100;
+    msg.price = 50000;
+
+    for (size_t i = 0; i < num_messages; ++i) {
+        msg.order_reference_num = i;
+        out.write(reinterpret_cast<const char*>(&msg), sizeof(ItchAddOrder));
+    }
+    out.close();
+}
+
+void test_zero_copy_parsing(const std::string& filename) {
+    std::cout << "[Test] Booting Zero-Copy Parser...\n";
+
+    MmapReader reader(filename);
+    const char* ptr = reader.data();
+    const char* end_ptr = ptr + reader.size();
+
+    size_t messages_parsed = 0;
+    uint64_t sum_checksum = 0; // Prevent the compiler from optimizing the loop away
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // The core Zero-Copy Parsing Loop
+    while (ptr + sizeof(ItchAddOrder) <= end_ptr) {
+        // Cast the raw memory directly to our struct (O(1) operation, ZERO copying!)
+        const ItchAddOrder* msg = reinterpret_cast<const ItchAddOrder*>(ptr);
+
+        if (msg->message_type == 'A') {
+            sum_checksum += msg->order_reference_num;
+            messages_parsed++;
+        }
+
+        ptr += sizeof(ItchAddOrder); // Slide pointer forward
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = end_time - start_time;
+
+    double bytes_processed = messages_parsed * sizeof(ItchAddOrder);
+    double gb_per_sec = (bytes_processed / 1024 / 1024 / 1024) / diff.count();
+
+    std::cout << "  -> Parsed " << messages_parsed << " messages.\n";
+    std::cout << "  -> Time elapsed: " << diff.count() << " seconds.\n";
+    std::cout << "  -> Throughput: " << gb_per_sec << " GB/s\n";
+    std::cout << "  -> Verification Checksum: " << sum_checksum << "\n";
+}
+
 int main() {
     std::cout << "=== Starting LOB Engine Phase 1 Test Execution Suite ===\n\n";
 
@@ -133,5 +190,18 @@ int main() {
     std::cout << "=== Starting LOB Engine Phase 2 Test Execution Suite ===\n\n";
     test_matching_engine();
     std::cout << "\n=== All Tests Passed Successfully! ===\n";
+    std::cout << "=== Starting LOB Engine Phase 3 Benchmarks ===\n\n";
+
+    const std::string test_file = "market_data.bin";
+    const size_t MSG_COUNT = 10'000'000; // 10 Million messages (~360 MB)
+
+    generate_dummy_binary_file(test_file, MSG_COUNT);
+    test_zero_copy_parsing(test_file);
+
+    // Cleanup
+    std::remove(test_file.c_str());
+
+    std::cout << "\n=== All Tests Passed Successfully! ===\n";
+
     return 0;
 }
