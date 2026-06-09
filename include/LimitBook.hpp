@@ -8,12 +8,13 @@ constexpr uint32_t MAX_PRICE = 100000;
 
 class LimitBook {
 private:
-    std::array<PriceLevel, MAX_PRICE> m_bids;
-    std::array<PriceLevel, MAX_PRICE> m_asks;
+    std::unique_ptr<std::array<PriceLevel, MAX_PRICE>> m_bids;
+    std::unique_ptr<std::array<PriceLevel, MAX_PRICE>> m_asks;
     
     // Track top of book
     uint32_t m_best_bid{0};
-    uint32_t m_best_ask{MAX_PRICE};
+    uint32_t NO_VALID_ASK = MAX_PRICE - 1; // 99999, a valid sentinel
+    uint32_t m_best_ask{NO_VALID_ASK};
 
     OrderMemoryPool& m_pool; // Reference to our Phase 1 memory allocator
 
@@ -33,7 +34,7 @@ private:
     // Compile-time specialized matching engine
     template <Side S>
     void match_logic(Order* incoming) {
-        auto& maker_book = (S == Side::Buy) ? m_asks : m_bids;
+        auto& maker_book = (S == Side::Buy) ? *m_asks : *m_bids;
         auto& best_maker_price = (S == Side::Buy) ? m_best_ask : m_best_bid;
 
         // 1. Cross the spread
@@ -93,12 +94,12 @@ private:
     template <Side S>
     void add_to_book(Order* order) {
         if constexpr (S == Side::Buy) {
-            m_bids[order->price].append(order);
+            (*m_bids)[order->price].append(order);
             if (order->price > m_best_bid) {
                 m_best_bid = order->price;
             }
         } else {
-            m_asks[order->price].append(order);
+            (*m_asks)[order->price].append(order);
             if (order->price < m_best_ask) {
                 m_best_ask = order->price;
             }
