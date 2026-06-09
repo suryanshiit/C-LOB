@@ -5,22 +5,25 @@
 
 // Assuming a bounded price range for absolute O(1) array lookups (e.g., 0 to 100,000 ticks)
 constexpr uint32_t MAX_PRICE = 100000;
+constexpr uint32_t NO_VALID_ASK = MAX_PRICE - 1; // Sentinel: ask book is empty
 
 class LimitBook {
 private:
     std::unique_ptr<std::array<PriceLevel, MAX_PRICE>> m_bids;
     std::unique_ptr<std::array<PriceLevel, MAX_PRICE>> m_asks;
-    
+
     // Track top of book
     uint32_t m_best_bid{0};
-    uint32_t NO_VALID_ASK = MAX_PRICE - 1; // 99999, a valid sentinel
     uint32_t m_best_ask{NO_VALID_ASK};
 
     OrderMemoryPool& m_pool; // Reference to our Phase 1 memory allocator
 
 public:
-    explicit LimitBook(OrderMemoryPool& pool) : m_pool(pool) {}
-
+    explicit LimitBook(OrderMemoryPool& pool)
+        : m_bids(std::make_unique<std::array<PriceLevel, MAX_PRICE>>()),  // ← allocates 6.4 MB on heap
+          m_asks(std::make_unique<std::array<PriceLevel, MAX_PRICE>>()),  // ← allocates 6.4 MB on heap
+          m_pool(pool)
+    {}
     // Main entry point for new orders
     void process_order(Order* incoming) {
         if (incoming->side == Side::Buy) {
@@ -39,10 +42,11 @@ private:
 
         // 1. Cross the spread
         while (incoming->quantity > 0) {
-            // Check if marketable
             bool is_marketable;
             if constexpr (S == Side::Buy) {
-                is_marketable = (best_maker_price <= incoming->price);
+                // FIX: also guard against the NO_VALID_ASK sentinel
+                is_marketable = (best_maker_price < MAX_PRICE - 1) &&
+                                (best_maker_price <= incoming->price);
             } else {
                 is_marketable = (best_maker_price >= incoming->price) && (best_maker_price != 0);
             }
@@ -70,12 +74,10 @@ private:
             // 4. Update Top of Book if level is depleted
             if (level.is_empty()) {
                 if constexpr (S == Side::Buy) {
-                    // Ask depleted, scan up for next best ask
-                    while (best_maker_price < MAX_PRICE && maker_book[best_maker_price].is_empty()) {
+                    while (best_maker_price < MAX_PRICE - 1 && maker_book[best_maker_price].is_empty()) {
                         best_maker_price++;
                     }
                 } else {
-                    // Bid depleted, scan down for next best bid
                     while (best_maker_price > 0 && maker_book[best_maker_price].is_empty()) {
                         best_maker_price--;
                     }
@@ -83,7 +85,6 @@ private:
             }
         }
 
-        // 5. Add remaining quantity to the book
         if (incoming->quantity > 0) {
             add_to_book<S>(incoming);
         } else {

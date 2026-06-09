@@ -20,5 +20,4 @@ else()
     add_compile_options(-O3 -march=native -ffast-math  -fno-rtti)
 endif()
 
-add_executable(LOB_Engine main.cpp
-        main.cpp)
+add_executable(LOB_Engine main.cpp)
